@@ -1,8 +1,19 @@
 /* ═══════════════════════════════════════
    STATE  –  persisted via localStorage
 ═══════════════════════════════════════ */
-const API = 'http://localhost:3000/api';
 
+// const API = 'https://abc123.ngrok-free.app/api';
+const API = 'https://contort-schematic-cameo.ngrok-free.dev/api';
+// const API = 'https://contort-schematic-cameo.ngrok-free.dev/api';
+
+// const response = await fetch(`${API}/your-endpoint`, {
+//   method: 'POST',
+//   headers: {
+//     'Content-Type': 'application/json',
+//     'ngrok-skip-browser-warning': 'true'  // ← add this line
+//   },
+//   body: JSON.stringify(data)
+// });
 
 let currentUser = null;
 let currentAlarmHabit = null;
@@ -81,7 +92,8 @@ async function doSignup() {
   try {
     const r = await fetch(`${API}/auth/signup`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
       body: JSON.stringify({ username: user, password: pass, full_name: name })
     });
     const data = await r.json();
@@ -102,7 +114,8 @@ async function doLogin() {
   try {
     const r = await fetch(`${API}/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
       body: JSON.stringify({ username: user, password: pass })
     });
     const data = await r.json();
@@ -1130,7 +1143,8 @@ async function logHabit(id) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + token
+        'Authorization': 'Bearer ' + token,
+        'ngrok-skip-browser-warning': 'true'
       },
       body: JSON.stringify(entry)
     }).catch(e => console.warn('Log sync failed', e));
