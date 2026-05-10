@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════
    STATE  –  persisted via localStorage
 ═══════════════════════════════════════ */
-const API = 'https://your-backend-url.com/api'; // change this
+const API = 'http://localhost:3000/api';
 
 
 let currentUser = null;
@@ -71,7 +71,6 @@ function togglePw(id, btn) {
 
 // ── Replace these two functions in spttool.js ──
 
-const API = 'https://your-backend-url.com/api'; // change this
 
 async function doSignup() {
   const name = document.getElementById('su-name').value.trim();
@@ -1098,37 +1097,53 @@ function uploadSound(habitId,input){
 
 /* setAlarm replaced by setAlarmAmPm above */
 
-function logHabit(id){
-  const ud=getUserData();if(!ud)return;
-  const dur=parseFloat(document.getElementById('dur-'+id).value)||0;
-  const startT=getAmPmVal(`log-${id}-start`);
-  const endT=getAmPmVal(`log-${id}-end`);
-  const note=document.getElementById('note-'+id).value;
-  const habit=HABITS.find(h=>h.id===id);
-  if(!dur&&!startT){alert('Please enter a duration or start time.');return;}
-  const entry={
-    id:Date.now(),
-    habitId:id,
-    habitName:habit.name,
-    habitIcon:habit.icon,
-    date:new Date().toISOString().split('T')[0],
-    duration:dur,
-    unit:habit.unit,
-    startTime:startT,
-    endTime:endT,
+async function logHabit(id) {
+  const ud = getUserData(); if (!ud) return;
+  const dur = parseFloat(document.getElementById('dur-' + id).value) || 0;
+  const startT = getAmPmVal(`log-${id}-start`);
+  const endT = getAmPmVal(`log-${id}-end`);
+  const note = document.getElementById('note-' + id).value;
+  const habit = HABITS.find(h => h.id === id);
+  if (!dur && !startT) { alert('Please enter a duration or start time.'); return; }
+
+  const entry = {
+    id: Date.now(),
+    habitId: id,
+    habitName: habit.name,
+    habitIcon: habit.icon,
+    date: new Date().toISOString().split('T')[0],
+    duration: dur,
+    unit: habit.unit,
+    startTime: startT,
+    endTime: endT,
     note
   };
+
+  // Save locally as before
   ud.logs.push(entry);
   saveUserData();
-  document.getElementById('dur-'+id).value='';
-  document.getElementById('note-'+id).value='';
-  const btn=document.querySelector(`#habit-card-${id} .log-btn`);
-  if(btn){const orig=btn.textContent;btn.textContent='✅ Saved!';btn.style.background='var(--green-dk)';setTimeout(()=>{btn.textContent=orig;btn.style.background='';},1500);}
+
+  // Also save to backend
+  const token = localStorage.getItem('qt_token');
+  if (token) {
+    fetch(`${API}/habits/logs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify(entry)
+    }).catch(e => console.warn('Log sync failed', e));
+  }
+
+  document.getElementById('dur-' + id).value = '';
+  document.getElementById('note-' + id).value = '';
+  const btn = document.querySelector(`#habit-card-${id} .log-btn`);
+  if (btn) { const orig = btn.textContent; btn.textContent = '✅ Saved!'; btn.style.background = 'var(--green-dk)'; setTimeout(() => { btn.textContent = orig; btn.style.background = ''; }, 1500); }
   renderCalendar();
   renderTrends();
   renderHistory();
 }
-
 /* ═══════════════════════════════════════
    ALARM WATCHER
 ═══════════════════════════════════════ */
