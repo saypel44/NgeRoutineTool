@@ -1,7 +1,8 @@
 /* ═══════════════════════════════════════
    STATE  –  persisted via localStorage
 ═══════════════════════════════════════ */
-const API_BASE = 'https://nge-routine-backend.onrender.com';
+const API = 'https://your-backend-url.com/api'; // change this
+
 
 let currentUser = null;
 let currentAlarmHabit = null;
@@ -66,28 +67,54 @@ function togglePw(id, btn) {
   inp.type = inp.type === 'password' ? 'text' : 'password';
   btn.textContent = inp.type === 'password' ? '👁' : '🙈';
 }
-function doSignup() {
+// 
+
+// ── Replace these two functions in spttool.js ──
+
+const API = 'https://your-backend-url.com/api'; // change this
+
+async function doSignup() {
   const name = document.getElementById('su-name').value.trim();
   const user = document.getElementById('su-user').value.trim().toLowerCase();
   const pass = document.getElementById('su-pass').value;
   if (!name || !user || !pass) return showMsg('su-msg', 'Please fill in all fields.', 'err');
-  if (user.length < 3) return showMsg('su-msg', 'Username must be at least 3 characters.', 'err');
-  if (pass.length < 6) return showMsg('su-msg', 'Password must be at least 6 characters.', 'err');
-  const users = _loadUsers();
-  if (users[user]) return showMsg('su-msg', 'That username is already taken.', 'err');
-  users[user] = { name, pass, joinedAt: new Date().toISOString(), lastChanged: null };
-  _saveUsers(users);
-  showMsg('su-msg', 'Account created! Signing you in…', 'ok');
-  setTimeout(() => launchApp({ username: user, name }), 900);
+
+  try {
+    const r = await fetch(`${API}/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: user, password: pass, full_name: name })
+    });
+    const data = await r.json();
+    if (!r.ok) return showMsg('su-msg', data.error || 'Signup failed.', 'err');
+    localStorage.setItem('qt_token', data.token);
+    showMsg('su-msg', 'Account created! Signing you in…', 'ok');
+    setTimeout(() => launchApp({ username: data.username, name: data.full_name }), 900);
+  } catch {
+    showMsg('su-msg', 'Network error. Please try again.', 'err');
+  }
 }
-function doLogin() {
+
+async function doLogin() {
   const user = document.getElementById('li-user').value.trim().toLowerCase();
   const pass = document.getElementById('li-pass').value;
   if (!user || !pass) return showMsg('li-msg', 'Please enter your username and password.', 'err');
-  const users = _loadUsers();
-  if (!users[user] || users[user].pass !== pass) return showMsg('li-msg', 'Incorrect username or password.', 'err');
-  launchApp({ username: user, name: users[user].name });
+
+  try {
+    const r = await fetch(`${API}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: user, password: pass })
+    });
+    const data = await r.json();
+    if (!r.ok) return showMsg('li-msg', data.error || 'Login failed.', 'err');
+    localStorage.setItem('qt_token', data.token);
+    launchApp({ username: data.username, name: data.full_name });
+  } catch {
+    showMsg('li-msg', 'Network error. Please try again.', 'err');
+  }
 }
+
 function launchApp(user) {
   currentUser = user;
   _currentData = null; // clear cache so getUserData() re-loads from storage fresh
