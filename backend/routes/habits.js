@@ -1,66 +1,25 @@
-
-
-
-// routes/habits.js
-const router = require('express').Router();
-const auth   = require('../middleware/auth');
-const db     = require('../db');
-
-// Helper: get profile_id for the logged-in user
-async function getProfileId(userId) {
-  const [[p]] = await db.execute(
-    'SELECT id FROM profiles WHERE user_id = ?', [userId]
-  );
-  return p?.id;
-}
-
-// GET all habits
-router.get('/', auth, async (req, res) => {
+// POST save a log entry
+router.post('/logs', auth, async (req, res) => {
   const profileId = await getProfileId(req.user.userId);
-  const [rows] = await db.execute(
-    'SELECT * FROM habits WHERE profile_id = ? ORDER BY created_at DESC', [profileId]
-  );
-  res.json(rows);
-});
-
-// POST create habit
-router.post('/', auth, async (req, res) => {
-  const profileId = await getProfileId(req.user.userId);
-  const { name, category } = req.body;
+  const { habitId, habitName, habitIcon, date, duration, unit, startTime, endTime, note } = req.body;
   const [result] = await db.execute(
-    'INSERT INTO habits (profile_id, name, category) VALUES (?, ?, ?)',
-    [profileId, name, category || null]
+    'INSERT INTO habit_logs (habit_id, value, note, logged_at) VALUES (?, ?, ?, ?)',
+    [habitId, duration, note || null, date]
   );
-  res.json({ id: result.insertId, name, category });
+  res.json({ id: result.insertId });
 });
 
-// POST log a habit entry
-router.post('/:habitId/logs', auth, async (req, res) => {
-  const { value, note } = req.body;
-  await db.execute(
-    'INSERT INTO habit_logs (habit_id, value, note) VALUES (?, ?, ?)',
-    [req.params.habitId, value ?? null, note ?? null]
-  );
-  res.json({ success: true });
-});
-
-// GET logs for a habit
-router.get('/:habitId/logs', auth, async (req, res) => {
+// GET all logs for current user
+router.get('/logs', auth, async (req, res) => {
+  const profileId = await getProfileId(req.user.userId);
   const [rows] = await db.execute(
-    'SELECT * FROM habit_logs WHERE habit_id = ? ORDER BY logged_at DESC LIMIT 90',
-    [req.params.habitId]
+    `SELECT hl.* FROM habit_logs hl
+     JOIN habits h ON h.id = hl.habit_id
+     WHERE h.profile_id = ?
+     ORDER BY hl.logged_at DESC LIMIT 500`,
+    [profileId]
   );
   res.json(rows);
 });
 
-// GET trends for a habit
-router.get('/:habitId/trends', auth, async (req, res) => {
-  const [rows] = await db.execute(
-    'SELECT * FROM habit_trends WHERE habit_id = ? ORDER BY week_start DESC LIMIT 12',
-    [req.params.habitId]
-  );
-  res.json(rows);
-});
-
-module.exports = router;
-
+module.exports = router; // ← this line must be LAST
