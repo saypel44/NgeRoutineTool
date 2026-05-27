@@ -1879,6 +1879,7 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);min-he
   margin-bottom: 16px;
   font-size: 13px;
 }
+
 .hist-month-label {
   font-family: 'Fraunces', serif;
   font-weight: 600;
