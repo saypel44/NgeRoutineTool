@@ -512,7 +512,8 @@ async function syncLogsFromBackend() {
   const ud = getUserData();
   if (!ud) return;
 
-  // 1. Sync logs
+  // 1. Sync logs — server is source of truth: merge server records in,
+  //    keeping any local-only entries that haven't been pushed yet.
   try {
     const res = await fetch(`${API_BASE}/logs`, {
       headers: { 'Authorization': 'Bearer ' + token, 'ngrok-skip-browser-warning': 'true' }
@@ -520,26 +521,30 @@ async function syncLogsFromBackend() {
     if (res.ok) {
       const dbLogs = await res.json();
       if (Array.isArray(dbLogs)) {
-        let changed = false;
+        // Build a map of server IDs for fast lookup
+        const serverIds = new Set(dbLogs.map(l => l.id));
+
+        // Remove local entries that exist on the server (will be replaced by server version)
+        ud.logs = ud.logs.filter(local => !serverIds.has(local.id));
+
+        // Add all server records
         dbLogs.forEach(l => {
-          const exists = ud.logs.find(local => local.id === l.id);
-          if (!exists) {
-            ud.logs.push({
-              id:        l.id,
-              habitId:   l.habit_id,
-              habitName: l.habit_name,
-              habitIcon: l.habit_icon || '📋',
-              date:      normalizeDateValue(l.date),
-              duration:  l.duration,
-              unit:      l.unit || 'hrs',
-              startTime: l.start_time || '',
-              endTime:   l.end_time   || '',
-              note:      l.note       || ''
-            });
-            changed = true;
-          }
+          ud.logs.push({
+            id:        l.id,
+            habitId:   l.habit_id,
+            habitName: l.habit_name,
+            habitIcon: l.habit_icon || '📋',
+            date:      normalizeDateValue(l.date),
+            duration:  l.duration,
+            unit:      l.unit || 'hrs',
+            startTime: l.start_time || '',
+            endTime:   l.end_time   || '',
+            note:      l.note       || ''
+          });
         });
-        if (changed) { normalizeLogDates(ud); saveUserData(); }
+
+        normalizeLogDates(ud);
+        saveUserData();
       }
     }
   } catch(e) { console.warn('Log sync failed:', e); }
@@ -790,7 +795,8 @@ document.addEventListener('DOMContentLoaded', function() {
   // Auto-login: if a session was saved, skip the login screen
   try {
     const saved = localStorage.getItem('qt_session');
-    if (saved) {
+    const token = localStorage.getItem('qt_token');
+    if (saved && token) {
       const session = JSON.parse(saved);
       const users = _loadUsers();
       if (session.username && users[session.username]) {
@@ -2251,6 +2257,29 @@ function lfSaveLog(){
 
   saveUserData();
 
+  // ── POST to backend for cross-device sync ──
+  try {
+    const token = localStorage.getItem('qt_token');
+    if (token) {
+      fetch(`${API_BASE}/logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({
+          id:         entry.id,
+          habit_id:   habitId,
+          habit_name: cat,
+          habit_icon: icon,
+          date:       dateVal,
+          duration:   entry.duration,
+          unit:       'hrs',
+          start_time: entry.startTime,
+          end_time:   entry.endTime,
+          note:       entry.note || ''
+        })
+      }).catch(e => console.warn('Log sync failed:', e));
+    }
+  } catch(e) { console.warn('Log sync error:', e); }
+
   msg.textContent=`✅ Logged! ${cat} · ${diff||duration+' '+unit}`;
   msg.className='auth-msg ok';
 
@@ -3354,6 +3383,18 @@ function deleteLog(logId) {
   if (idx === -1) return;
   ud.logs.splice(idx, 1);
   saveUserData();
+
+  // ── DELETE from backend for cross-device sync ──
+  try {
+    const token = localStorage.getItem('qt_token');
+    if (token) {
+      fetch(`${API_BASE}/logs/${logId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + token }
+      }).catch(e => console.warn('Log delete sync failed:', e));
+    }
+  } catch(e) { console.warn('Log delete sync error:', e); }
+
   renderHistory();
   renderCalendar();
   renderCalendar2();
@@ -3612,6 +3653,29 @@ function saveAddAlarm() {
   });
 
   saveUserData();
+
+  // ── POST log to backend for cross-device sync ──
+  try {
+    const token = localStorage.getItem('qt_token');
+    if (token) {
+      fetch(`${API_BASE}/logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({
+          id:         entry.id,
+          habit_id:   'quickalarm',
+          habit_name: category,
+          habit_icon: catIcon,
+          date:       entry.date,
+          duration:   durationHrs,
+          unit:       'hrs',
+          start_time: fromDisplay,
+          end_time:   toDisplay,
+          note:       `Quick Alarm · ${diff||'—'} · Sound: ${_aaSound}`
+        })
+      }).catch(e => console.warn('Quick alarm log sync failed:', e));
+    }
+  } catch(e) { console.warn('Quick alarm sync error:', e); }
 
   // Schedule the alarm notification
   _scheduleQuickAlarm(entry);
