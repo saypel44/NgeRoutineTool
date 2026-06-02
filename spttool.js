@@ -1,3 +1,330 @@
+(function(global){
+  'use strict';
+
+  const instances = new Map();
+
+  function Chart(canvas, config) {
+    if (!(this instanceof Chart)) return new Chart(canvas, config);
+    this.canvas = canvas;
+    this.config = config;
+    this._tooltip = null;
+    const existing = instances.get(canvas);
+    if (existing) existing.destroy();
+    instances.set(canvas, this);
+    this._resize();
+    this._draw();
+    this._bindEvents();
+  }
+
+
+
+  Chart.prototype._resize = function() {
+    const parent = this.canvas.parentElement;
+    if (!parent) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = parent.clientWidth || 300;
+    const h = parent.clientHeight || 200;
+    this.canvas.width  = w * dpr;
+    this.canvas.height = h * dpr;
+    this.canvas.style.width  = w + 'px';
+    this.canvas.style.height = h + 'px';
+    this._dpr = dpr;
+    this._w = w;
+    this._h = h;
+  };
+
+  Chart.prototype._bindEvents = function() {
+    const self = this;
+
+    // ── helpers to compute layout (mirrors _draw layout) ──
+    function _layout() {
+      const PAD_TOP = 16, PAD_RIGHT = 16, PAD_BOTTOM = 44, PAD_LEFT = 44;
+      const W = self._w || self.canvas.width;
+      const H = self._h || self.canvas.height;
+      return { plotX: PAD_LEFT, plotY: PAD_TOP,
+               plotW: W - PAD_LEFT - PAD_RIGHT,
+               plotH: H - PAD_TOP - PAD_BOTTOM, W, H };
+    }
+
+    // Find the nearest dot across all datasets to a mouse position
+    function _nearestDot(mx, my) {
+      const { plotX, plotY, plotW, plotH } = _layout();
+      const data = self.config.data || {};
+      const datasets = (data.datasets || []).filter(ds => ds.data && ds.data.length);
+      const labels = data.labels || [];
+      if (!labels.length) return null;
+
+      const allVals = [];
+      datasets.forEach(ds => ds.data.forEach(v => { if (v !== null && v !== undefined) allVals.push(+v); }));
+      const scaleOpts = ((self.config.options || {}).scales || {}).y || {};
+      const yMin = scaleOpts.min !== undefined ? scaleOpts.min : Math.min(0, ...allVals);
+      const yMax = scaleOpts.max !== undefined ? scaleOpts.max : (Math.max(...allVals) * 1.1 || 1);
+
+      function toX(i) { return plotX + (i / Math.max(labels.length - 1, 1)) * plotW; }
+      function toY(v) { return plotY + plotH - ((v - yMin) / (yMax - yMin)) * plotH; }
+
+      let best = null, bestDist = 22; // px snap radius
+      datasets.forEach(ds => {
+        const pr = ds.pointRadius !== undefined ? ds.pointRadius : 4;
+        const snapR = Math.max(pr + 8, 16);
+        ds.data.forEach((v, i) => {
+          if (v === null || v === undefined) return;
+          const dx = mx - toX(i), dy = my - toY(+v);
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < snapR && dist < bestDist) {
+            bestDist = dist;
+            best = { ds, i, v: +v, label: labels[i], color: ds.borderColor || '#1D9E75' };
+          }
+        });
+      });
+      return best;
+    }
+
+    this._mouseMove = function(e) {
+      const rect = self.canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const dot = _nearestDot(mx, my);
+      self._hoveredDot = dot;
+      self.canvas.style.cursor = dot ? 'pointer' : 'default';
+      self._draw();
+    };
+    this._mouseLeave = function() {
+      self._hoveredDot = null;
+      self.canvas.style.cursor = 'default';
+      self._draw();
+    };
+    this._click = function(e) {
+      const rect = self.canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const dot = _nearestDot(mx, my);
+      if (dot && self.config.options && self.config.options.onClick) {
+        self.config.options.onClick(dot);
+      }
+    };
+    this.canvas.addEventListener('mousemove', this._mouseMove);
+    this.canvas.addEventListener('mouseleave', this._mouseLeave);
+    this.canvas.addEventListener('click', this._click);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      this._resizeObs = new ResizeObserver(function() {
+        self._resize();
+        self._draw();
+      });
+      if (this.canvas.parentElement) this._resizeObs.observe(this.canvas.parentElement);
+    }
+  };
+
+  Chart.prototype.destroy = function() {
+    if (this._resizeObs) this._resizeObs.disconnect();
+    if (this._mouseMove)  this.canvas.removeEventListener('mousemove',  this._mouseMove);
+    if (this._mouseLeave) this.canvas.removeEventListener('mouseleave', this._mouseLeave);
+    if (this._click)      this.canvas.removeEventListener('click',      this._click);
+    instances.delete(this.canvas);
+    const ctx = this.canvas.getContext('2d');
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  };
+
+  Chart.prototype._draw = function() {
+    const canvas = this.canvas;
+    const ctx = canvas.getContext('2d');
+    const dpr = this._dpr || 1;
+    const W = this._w || canvas.width;
+    const H = this._h || canvas.height;
+    const opts = this.config.options || {};
+    const data = this.config.data || {};
+    const datasets = (data.datasets || []).filter(ds => ds.data && ds.data.length);
+    const labels = data.labels || [];
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, W, H);
+
+    // Layout
+    const PAD_TOP = 16, PAD_RIGHT = 16, PAD_BOTTOM = 44, PAD_LEFT = 44;
+    const plotX = PAD_LEFT, plotY = PAD_TOP;
+    const plotW = W - PAD_LEFT - PAD_RIGHT;
+    const plotH = H - PAD_TOP - PAD_BOTTOM;
+
+    if (!datasets.length || !labels.length) {
+      ctx.fillStyle = '#a09c96';
+      ctx.font = '13px Sora,sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('No data yet', W / 2, H / 2);
+      ctx.restore();
+      return;
+    }
+
+    // Collect all numeric values
+    const allVals = [];
+    datasets.forEach(ds => ds.data.forEach(v => { if (v !== null && v !== undefined) allVals.push(+v); }));
+    const scaleOpts = (opts.scales && opts.scales.y) || {};
+    const rawMin = scaleOpts.min !== undefined ? scaleOpts.min : Math.min(0, ...allVals);
+    const rawMax = scaleOpts.max !== undefined ? scaleOpts.max : Math.max(...allVals) * 1.1 || 1;
+    const yMin = rawMin, yMax = rawMax;
+
+    function toX(i) { return plotX + (i / Math.max(labels.length - 1, 1)) * plotW; }
+    function toY(v) { return plotY + plotH - ((v - yMin) / (yMax - yMin)) * plotH; }
+
+    // Grid lines
+    const maxTicks = (scaleOpts.ticks && scaleOpts.ticks.maxTicksLimit) || 6;
+    const tickStep = (scaleOpts.ticks && scaleOpts.ticks.stepSize) ? scaleOpts.ticks.stepSize : (yMax - yMin) / (maxTicks - 1);
+    ctx.strokeStyle = 'rgba(0,0,0,0.04)';
+    ctx.lineWidth = 1;
+    for (let v = yMin; v <= yMax + 0.001; v += tickStep) {
+      const y = toY(v);
+      ctx.beginPath(); ctx.moveTo(plotX, y); ctx.lineTo(plotX + plotW, y); ctx.stroke();
+      const tickCb = scaleOpts.ticks && scaleOpts.ticks.callback;
+      const label = tickCb ? tickCb(+v.toFixed(2)) : +v.toFixed(1);
+      ctx.fillStyle = '#a09c96';
+      ctx.font = '10px Sora,sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(label, plotX - 4, y + 4);
+    }
+
+    // X axis labels
+    const maxXLabels = Math.floor(plotW / 48);
+    const xStep = Math.max(1, Math.ceil(labels.length / maxXLabels));
+    ctx.fillStyle = '#a09c96';
+    ctx.font = '10px Sora,sans-serif';
+    ctx.textAlign = 'center';
+    labels.forEach((lbl, i) => {
+      if (i % xStep !== 0 && i !== labels.length - 1) return;
+      ctx.fillText(lbl, toX(i), plotY + plotH + 16);
+    });
+
+    // Determine hovered dot for highlight
+    const hovDot = this._hoveredDot;
+
+    // Datasets
+    datasets.forEach(ds => {
+      const color = ds.borderColor || '#1D9E75';
+      const pts = ds.data.map((v, i) => v !== null && v !== undefined ? { x: toX(i), y: toY(+v), v: +v, i } : null);
+
+      // Fill
+      if (ds.fill) {
+        ctx.beginPath();
+        let started = false;
+        pts.forEach(p => {
+          if (!p) return;
+          if (!started) { ctx.moveTo(p.x, p.y); started = true; } else { ctx.lineTo(p.x, p.y); }
+        });
+        ctx.lineTo(toX(pts.length - 1), toY(yMin));
+        ctx.lineTo(toX(0), toY(yMin));
+        ctx.closePath();
+        ctx.fillStyle = ds.backgroundColor || color + '22';
+        ctx.fill();
+      }
+
+      // Line — spanGaps: skip nulls but keep line connected to next real point
+      ctx.beginPath();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      const spanGaps = ds.spanGaps !== false; // default true
+      let lineStarted = false;
+      pts.forEach(p => {
+        if (!p) {
+          if (!spanGaps) lineStarted = false; // only break line if spanGaps disabled
+          return;
+        }
+        if (!lineStarted) { ctx.moveTo(p.x, p.y); lineStarted = true; } else { ctx.lineTo(p.x, p.y); }
+      });
+      ctx.stroke();
+
+      // Points — enlarge hovered dot
+      const pr = ds.pointRadius !== undefined ? ds.pointRadius : 4;
+      pts.forEach(p => {
+        if (!p) return;
+        const isHov = hovDot && hovDot.ds === ds && hovDot.i === p.i;
+        const r = isHov ? pr + 3 : pr;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = ds.pointBackgroundColor || color;
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = isHov ? 2.5 : 1.5;
+        ctx.stroke();
+        // Outer ring on hovered dot
+        if (isHov) {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, r + 4, 0, Math.PI * 2);
+          ctx.strokeStyle = color + '55';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+      });
+    });
+
+    // Dot-precise tooltip
+    if (hovDot) {
+      const { ds, i, v, label, color } = hovDot;
+      const dotX = toX(i);
+      const dotY = toY(v);
+
+      // Cross-hair lines
+      ctx.save();
+      ctx.strokeStyle = color + '44';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(dotX, plotY); ctx.lineTo(dotX, plotY + plotH); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(plotX, dotY); ctx.lineTo(plotX + plotW, dotY); ctx.stroke();
+      ctx.restore();
+
+      // Tooltip content
+      const ttOpts = opts.plugins && opts.plugins.tooltip;
+      let lbl = ` ${ds.label}: ${v}`;
+      if (ttOpts && ttOpts.callbacks && ttOpts.callbacks.label) {
+        const res = ttOpts.callbacks.label({ parsed: { y: v }, dataset: ds });
+        if (res !== null && res !== undefined) lbl = res;
+      }
+
+      const padding = 10;
+      const lineH = 19;
+      const lines = [
+        { text: label, color: '#6b6660', bold: true },
+        { text: lbl, color: '#1a1816' }
+      ];
+      const boxW = Math.max(...lines.map(l => l.text.length * 7.2)) + padding * 2 + 14;
+      const boxH = lines.length * lineH + padding * 2;
+
+      let bx = dotX + 14;
+      let by = dotY - boxH / 2;
+      if (bx + boxW > W - 4) bx = dotX - boxW - 14;
+      if (by < 2) by = 2;
+      if (by + boxH > H - 4) by = H - boxH - 4;
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.15)';
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.roundRect(bx, by, boxW, boxH, 7);
+      ctx.fill();
+      // Color accent left bar
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.roundRect(bx, by, 3, boxH, [7, 0, 0, 7]);
+      ctx.fill();
+      ctx.restore();
+
+      lines.forEach((line, li) => {
+        const ty = by + padding + li * lineH + lineH * 0.65;
+        ctx.fillStyle = line.color;
+        ctx.font = line.bold ? '600 11px Sora,sans-serif' : '12px Sora,sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(line.text, bx + padding + 6, ty);
+      });
+    }
+
+    ctx.restore();
+  };
+
+  global.Chart = Chart;
+}(window));
+
 /* ═══════════════════════════════════════
    STATE  –  persisted via localStorage
 ═══════════════════════════════════════ */
@@ -178,6 +505,77 @@ async function doLogin() {
   }
 }
 
+/* ── Cross-device sync: pull all logs & schedules from backend on login ── */
+async function syncLogsFromBackend() {
+  const token = localStorage.getItem('qt_token');
+  if (!token) return;
+  const ud = getUserData();
+  if (!ud) return;
+
+  // 1. Sync logs
+  try {
+    const res = await fetch(`${API_BASE}/logs`, {
+      headers: { 'Authorization': 'Bearer ' + token, 'ngrok-skip-browser-warning': 'true' }
+    });
+    if (res.ok) {
+      const dbLogs = await res.json();
+      if (Array.isArray(dbLogs)) {
+        let changed = false;
+        dbLogs.forEach(l => {
+          const exists = ud.logs.find(local => local.id === l.id);
+          if (!exists) {
+            ud.logs.push({
+              id:        l.id,
+              habitId:   l.habit_id,
+              habitName: l.habit_name,
+              habitIcon: l.habit_icon || '📋',
+              date:      normalizeDateValue(l.date),
+              duration:  l.duration,
+              unit:      l.unit || 'hrs',
+              startTime: l.start_time || '',
+              endTime:   l.end_time   || '',
+              note:      l.note       || ''
+            });
+            changed = true;
+          }
+        });
+        if (changed) { normalizeLogDates(ud); saveUserData(); }
+      }
+    }
+  } catch(e) { console.warn('Log sync failed:', e); }
+
+  // 2. Sync schedules
+  try {
+    const res2 = await fetch(`${API_BASE}/schedules`, {
+      headers: { 'Authorization': 'Bearer ' + token, 'ngrok-skip-browser-warning': 'true' }
+    });
+    if (res2.ok) {
+      const dbSched = await res2.json();
+      if (Array.isArray(dbSched) && dbSched.length) {
+        if (!ud.schedules) ud.schedules = [];
+        let changed2 = false;
+        dbSched.forEach(s => {
+          const exists = ud.schedules.find(local => local.id === s.id);
+          if (!exists) {
+            ud.schedules.push({
+              id:           s.id,
+              category:     s.category,
+              date:         normalizeDateValue(s.date),
+              fromTime:     s.from_time  || '08:00',
+              toTime:       s.to_time    || '09:00',
+              durationMins: s.duration_mins || 0,
+              tasks:        s.tasks || [],
+              createdAt:    s.created_at || new Date().toISOString()
+            });
+            changed2 = true;
+          }
+        });
+        if (changed2) saveUserData();
+      }
+    }
+  } catch(e) { console.warn('Schedule sync failed:', e); }
+}
+
 function launchApp(user) {
   currentUser = user;
   _currentData = null; // clear cache so getUserData() re-loads from storage fresh
@@ -188,11 +586,17 @@ function launchApp(user) {
   document.getElementById('hdr-name').textContent = '';
   document.getElementById('auth-screen').classList.remove('active');
   document.getElementById('app-screen').classList.add('active');
-  buildHabitCards();
-  renderCalendar();
-  renderTrends();
-  renderHistory();
-  renderTrackerSchedules();
+
+  // Pull backend data first, then render everything
+  syncLogsFromBackend().then(() => {
+    buildHabitCards();
+    renderCalendar();
+    renderTrends();
+    renderHistory();
+    renderTrackerSchedules();
+    renderTrackerTodayLogs();
+  });
+
   startAlarmWatcher();
   setTimeout(_rearmQuickAlarms, 500);
   window.scrollTo(0, 0);
@@ -1384,6 +1788,7 @@ async function logHabit(id) {
   renderCalendar();
   renderTrends();
   renderHistory();
+  renderTrackerTodayLogs();
 }
 /* ═══════════════════════════════════════
    ALARM WATCHER
@@ -3599,6 +4004,24 @@ async function saveSchedule() {
     });
 
     msgEl.textContent = '✅ Schedule saved!';
+
+    // Sync new schedule to backend for cross-device access
+    const token = localStorage.getItem('qt_token');
+    if (token) {
+      fetch(`${API_BASE}/schedules`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'ngrok-skip-browser-warning': 'true' },
+        body: JSON.stringify({
+          id:            schedId,
+          category,
+          date,
+          from_time:     from,
+          to_time:       to,
+          duration_mins: durationMins,
+          tasks:         JSON.stringify(tasks)
+        })
+      }).catch(e => console.warn('Schedule sync failed:', e));
+    }
   }
 
   msgEl.className = 'auth-msg ok';
@@ -3622,6 +4045,7 @@ async function saveSchedule() {
   renderTrackerSchedules();
   renderHistory();
   renderTrends();
+  renderTrackerTodayLogs();
   setTimeout(() => closeScheduleModal(), 900);
 }
 
@@ -3637,6 +4061,7 @@ function deleteSchedule(id) {
   renderTrackerSchedules();
   renderHistory();
   renderTrends();
+  renderTrackerTodayLogs();
 }
 
 /* ── Render ── */
@@ -3821,11 +4246,78 @@ function _formatDateLabel(d) {
   return d.toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric' });
 }
 
-/* Patch showTab to render schedules when tracker is opened */
+/* ── TODAY'S LOGGED TIME (shown at bottom of Tracker tab) ── */
+function renderTrackerTodayLogs() {
+  const wrap = document.getElementById('tracker-today-logs');
+  if (!wrap) return;
+
+  const ud = getUserData();
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todayLogs = ud ? ud.logs.filter(l => !l.isQuickAlarm && normalizeDateValue(l.date) === todayStr) : [];
+
+  if (!todayLogs.length) {
+    wrap.innerHTML = '';
+    return;
+  }
+
+  let html = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 0 8px;border-top:.5px solid var(--border);margin-top:4px">
+      <div style="font-size:11px;font-weight:600;color:var(--hint);letter-spacing:.07em;text-transform:uppercase">Today</div>
+      <button type="button" onclick="clearTodayTrackerLogs()"
+        style="font-size:11px;padding:6px 10px;border:1px solid var(--border);border-radius:999px;background:transparent;color:var(--text);cursor:pointer;font-family:'Sora',sans-serif;transition:background .15s,color .15s"
+        onmouseover="this.style.background='var(--red-lt)';this.style.color='var(--red)'"
+        onmouseout="this.style.background='transparent';this.style.color='var(--text)'">🗑 Clear today</button>
+    </div>`;
+
+  todayLogs.slice().sort((a, b) => b.id - a.id).forEach(l => {
+    const durLabel = _fmtLogDuration(l);
+    const timeLabel = l.startTime ? `<span style="color:var(--hint)"> · ${l.startTime}${l.endTime ? '–' + l.endTime : ''}</span>` : '';
+    html += `
+      <div style="background:var(--surf);border:.5px solid var(--border);border-radius:var(--r);padding:11px 14px;margin-bottom:8px;display:flex;align-items:center;gap:12px">
+        <div style="width:34px;height:34px;border-radius:10px;background:var(--surf2);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">${l.habitIcon}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:500;color:var(--text)">${l.habitName}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px"><strong>${durLabel}</strong>${timeLabel}</div>
+        </div>
+        <button onclick="deleteTodayLog(${l.id})" title="Delete"
+          style="background:none;border:none;cursor:pointer;color:var(--hint);font-size:16px;padding:2px 4px;flex-shrink:0;line-height:1"
+          onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--hint)'">🗑</button>
+      </div>`;
+  });
+
+  wrap.innerHTML = html;
+}
+
+function deleteTodayLog(logId) {
+  const ud = getUserData();
+  if (!ud) return;
+  const idx = ud.logs.findIndex(l => l.id === logId);
+  if (idx === -1) return;
+  ud.logs.splice(idx, 1);
+  saveUserData();
+  renderTrackerTodayLogs();
+  renderHistory();
+  renderCalendar();
+  renderTrends();
+}
+
+function clearTodayTrackerLogs() {
+  const ud = getUserData();
+  if (!ud) return;
+  const todayStr = new Date().toISOString().split('T')[0];
+  ud.logs = ud.logs.filter(l => normalizeDateValue(l.date) !== todayStr);
+  saveUserData();
+  renderTrackerTodayLogs();
+  renderHistory();
+  renderCalendar();
+  renderTrends();
+}
+
+/* Patch showTab to render schedules + today logs when tracker is opened */
 const _origShowTab = showTab;
 showTab = function(t) {
   _origShowTab(t);
-  if (t === 'tracker') renderTrackerSchedules();
+  if (t === 'tracker') { renderTrackerSchedules(); renderTrackerTodayLogs(); }
 };
 
 /* Also hide/show FAB based on active tab */
@@ -4235,8 +4727,8 @@ async function swLogTime() {
   if (typeof renderCalendar         === 'function') renderCalendar();
   if (typeof renderCalendar2        === 'function') renderCalendar2();
   if (typeof renderTrends           === 'function') renderTrends();
-  if (typeof renderTodayTracker     === 'function') renderTodayTracker();
   if (typeof renderTrackerSchedules === 'function') renderTrackerSchedules();
+  if (typeof renderTrackerTodayLogs === 'function') renderTrackerTodayLogs();
 
   const msg = document.getElementById('sw-log-msg');
   msg.textContent = `✅ Saved ${_swFmt(ms)} of ${cat} to History!`;
